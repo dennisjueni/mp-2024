@@ -1,0 +1,8 @@
+# Ignore Visual Studio Code folder
+.vscode/
+
+# Ignore Mac OS X storage files
+.DS_Store
+
+# Ignore __pycache__
+__pycache__
