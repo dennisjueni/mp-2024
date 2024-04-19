@@ -8,3 +8,4 @@ tensorboard
 matplotlib
 numba
 scipy
+wandb

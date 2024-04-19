@@ -23,6 +23,7 @@ from evaluate import evaluate_test
 from models import create_model
 from motion_metrics import MetricsEngine
 from tensorboardX import SummaryWriter
+import wandb
 from torch.utils.data import DataLoader
 from torchvision.transforms import transforms
 
@@ -31,6 +32,7 @@ def _log_loss_vals(loss_vals, writer, global_step, mode_prefix):
     for k in loss_vals:
         prefix = '{}/{}'.format(k, mode_prefix)
         writer.add_scalar(prefix, loss_vals[k], global_step)
+        wandb.log({prefix: loss_vals[k]}, step=global_step)
 
 
 def _evaluate(net, data_loader, metrics_engine):
@@ -81,6 +83,9 @@ def main(config):
     # Fix seed.
     if config.seed is None:
         config.seed = int(time.time())
+
+    # start a new wandb run to track this script
+    wandb.init(project="MP Project", config=config.to_dict())
 
     # Define some transforms that are applied to each `AMASSSample` before they are collected into a batch.
     # You can define your own transforms in `data_transforms.py` and add them here.
@@ -175,6 +180,7 @@ def main(config):
             # Write training stats to Tensorboard.
             _log_loss_vals(train_losses, writer, global_step, 'train')
             writer.add_scalar('lr', config.lr, global_step)
+            wandb.log({'lr': config.lr}, step=global_step)
 
             if global_step % (config.print_every - 1) == 0:
                 loss_string = ' '.join(['{}: {:.6f}'.format(k, train_losses[k]) for k in train_losses])
@@ -223,6 +229,9 @@ def main(config):
     # After the training, evaluate the model on the test and generate the result file that can be uploaded to the
     # submission system. The submission file will be stored in the model directory.
     evaluate_test(experiment_id)
+    
+    # [optional] finish the wandb run, necessary in notebooks
+    wandb.finish()
 
 
 if __name__ == '__main__':

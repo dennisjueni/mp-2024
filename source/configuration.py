@@ -89,3 +89,9 @@ class Configuration(object):
         with open(json_path, 'w') as f:
             s = json.dumps(vars(self), indent=2, sort_keys=True)
             f.write(s)
+            
+    def to_dict(self):
+        """Return config dict for wandb"""
+        return vars(self)
+
+            

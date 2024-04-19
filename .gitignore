@@ -1,8 +1,22 @@
 # Ignore Visual Studio Code folder
 .vscode/
 
+# Ignore Visual Studio Code folder
+.venv/
+
 # Ignore Mac OS X storage files
 .DS_Store
 
 # Ignore __pycache__
 __pycache__
+
+# Ignore Experiments Folder
+Experiments/
+
+# Ignore job.out
+job.out
+
+# Ignore any swp files
+*.swp
+
+wandb/
