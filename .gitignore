@@ -20,3 +20,6 @@ job.out
 *.swp
 
 wandb/
+
+data/
+
