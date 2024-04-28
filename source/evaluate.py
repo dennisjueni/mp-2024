@@ -16,7 +16,7 @@ from data import AMASSBatch
 from data import LMDBDataset
 from data_transforms import ToTensor
 from fk import SMPLForwardKinematics
-from models import create_model
+from utils import create_model
 from torch.utils.data import DataLoader
 from torchvision.transforms import transforms
 from visualize import Visualizer
@@ -140,4 +140,3 @@ if __name__ == '__main__':
     parser.add_argument('--model_id', required=True, help='Which model to evaluate.')
     config = parser.parse_args()
     evaluate_test(config.model_id, viz=True)
-

@@ -7,6 +7,8 @@ import glob
 import os
 import zipfile
 
+from transformer2d import Transformer
+
 
 def create_model_dir(experiment_main_dir, experiment_id, model_summary):
     """
@@ -48,3 +50,9 @@ def export_code(file_list, output_file):
 def count_parameters(net):
     """Count number of trainable parameters in `net`."""
     return sum(p.numel() for p in net.parameters() if p.requires_grad)
+
+
+def create_model(config):
+    # This is a helper function that can be useful if you have several model definitions that you want to
+    # choose from via the command line. For now, we just return the Dummy model.
+    return Transformer(config)

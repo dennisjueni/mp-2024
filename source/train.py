@@ -20,7 +20,7 @@ from data import LMDBDataset
 from data_transforms import ExtractWindow
 from data_transforms import ToTensor
 from evaluate import evaluate_test
-from models import create_model
+from utils import create_model
 from motion_metrics import MetricsEngine
 from tensorboardX import SummaryWriter
 import wandb
@@ -172,15 +172,23 @@ def main(config):
             # Compute gradients.
             train_losses, targets = net.backward(batch_gpu, model_out)
 
+            if config.use_lr_scheduler:
+                lr = net.learning_rate_scheduler(global_step)
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = lr
+                writer.add_scalar("lr", lr, global_step)
+                wandb.log({"lr": lr}, step=global_step)
+            else:
+                writer.add_scalar("lr", config.lr, global_step)
+                wandb.log({"lr": config.lr}, step=global_step)
+
             # Update params.
             optimizer.step()
 
             elapsed = time.time() - start
 
             # Write training stats to Tensorboard.
-            _log_loss_vals(train_losses, writer, global_step, 'train')
-            writer.add_scalar('lr', config.lr, global_step)
-            wandb.log({'lr': config.lr}, step=global_step)
+            _log_loss_vals(train_losses, writer, global_step, "train")
 
             if global_step % (config.print_every - 1) == 0:
                 loss_string = ' '.join(['{}: {:.6f}'.format(k, train_losses[k]) for k in train_losses])
@@ -229,7 +237,7 @@ def main(config):
     # After the training, evaluate the model on the test and generate the result file that can be uploaded to the
     # submission system. The submission file will be stored in the model directory.
     evaluate_test(experiment_id)
-    
+
     # [optional] finish the wandb run, necessary in notebooks
     wandb.finish()
 
