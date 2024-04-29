@@ -4,7 +4,8 @@ import torch.nn as nn
 import numpy as np
 
 from models import BaseModel
-from data import AMASSBatch
+from data import AMASSBatch # type: ignore
+from losses import mse  # type: ignore
 
 
 transformer_config = {
@@ -408,7 +409,7 @@ class Transformer(BaseModel):
 
         return final, attn_weights_block1, attn_weights_block2
 
-    def transformer(self, inputs, look_ahead_mask):
+    def transformer(self, inputs, look_ahead_mask=None):
         """
         The attention blocks
         :param inputs: inputs (batch_size, seq_len, num_joints, joint_size)
@@ -482,32 +483,65 @@ class Transformer(BaseModel):
 
         # batch.poses.shape = ([16, 144, 135])
 
-        prediction_targets = batch.poses[:, : self.window_len + 1, :]
-        target_input = prediction_targets[:, :-1, :]  # Basically sequence from 0 to 120
-        target_real = prediction_targets[:, 1:, :]  # Sequence from 1 to 121
+        batch_size = batch.batch_size
 
         model_out = {
             "seed": batch.poses[:, : self.config.seed_seq_len],
             "predictions": None,
         }
-        batch_size = batch.batch_size
-        sequence_length = target_input.shape[1]
 
-        assert sequence_length == self.window_len and sequence_length == 120
+        if self.training:
 
-        outputs, _ = self.transformer(
-            target_input.view(
-                batch_size, sequence_length, self.num_joints, self.joint_size
-            ),
-            self.look_ahead_mask,
-        )
+            prediction_targets = batch.poses[:, : self.window_len + 1, :]
+            target_input = prediction_targets[:, :-1, :]  # Sequence from 0 to 120
 
-        outputs = outputs.reshape(batch_size, sequence_length, -1)  # (16, 144, 135)
+            sequence_length = target_input.shape[1]
 
-        # The residual velocity stuff
-        outputs += target_input
+            assert sequence_length == self.window_len and sequence_length == 120
 
-        model_out["predictions"] = outputs
+            outputs, _ = self.transformer(
+                target_input.view(
+                    batch_size, sequence_length, self.num_joints, self.joint_size
+                ),
+                self.look_ahead_mask,
+            )
+
+            outputs = outputs.reshape(batch_size, sequence_length, -1)  # (16, 120, 135)
+
+            # The residual velocity stuff
+            outputs += target_input
+
+            model_out["predictions"] = outputs
+
+        else:
+            # In the evaluation phase, we start with the seed sequence and predict the future target_seq_len poses autoregressively.
+            inputs = batch.poses[:, : self.config.seed_seq_len, :]
+            num_steps = self.config.target_seq_len
+            predictions = []
+
+            for _ in range(num_steps):
+
+                outputs, _ = self.transformer(
+                    inputs.view(
+                        batch_size, self.window_len, self.num_joints, self.joint_size
+                    )
+                )
+
+                outputs = outputs.reshape(
+                    batch_size, self.window_len, -1
+                )  # (16, 120, 135)
+
+                # The residual velocity stuff
+                outputs += inputs
+
+                # Append the last prediction to the list
+                predictions.append(outputs[:, -1:, :])
+
+                # Concatenate the last prediction to the input sequence
+                inputs = torch.cat((inputs, predictions[-1]), dim=1)
+                inputs = inputs[:, -self.window_len :, :]
+
+            model_out["predictions"] = torch.cat(predictions, dim=1)
 
         return model_out
 
@@ -515,24 +549,30 @@ class Transformer(BaseModel):
         """The backward pass."""
         predictions_pose = model_out["predictions"]
 
-        prediction_targets = batch.poses[:, : self.window_len + 1, :]
-        target_real = prediction_targets[:, 1:, :]  # Sequence from 1 to 121
-
-        targets_pose = target_real
-        seq_len = self.window_len
-
-        diff = targets_pose - predictions_pose
-        per_joint_loss = torch.square(diff).view(
-            -1, seq_len, self.num_joints, self.joint_size
-        )
-        per_joint_loss = torch.sqrt(torch.sum(per_joint_loss, dim=-1))
-        per_joint_loss = torch.sum(per_joint_loss, dim=-1)
-        per_joint_loss = torch.mean(per_joint_loss)
-        loss_ = per_joint_loss
-
-        loss_vals = {"total_loss": loss_.cpu().item()}
-
         if self.training:
+
+            prediction_targets = batch.poses[:, : self.window_len + 1, :]
+            target_real = prediction_targets[:, 1:, :]  # Sequence from 1 to 121
+
+            targets_pose = target_real
+            seq_len = self.window_len
+
+            diff = targets_pose - predictions_pose
+            per_joint_loss = torch.square(diff).view(
+                -1, seq_len, self.num_joints, self.joint_size
+            )
+            per_joint_loss = torch.sqrt(torch.sum(per_joint_loss, dim=-1))
+            per_joint_loss = torch.sum(per_joint_loss, dim=-1)
+            per_joint_loss = torch.mean(per_joint_loss)
+            loss_ = per_joint_loss
+
+            loss_vals = {"total_loss": loss_.cpu().item()}
             loss_.backward()
+
+        else:
+            targets_pose = batch.poses[:, -self.config.target_seq_len :, :]
+
+            total_loss = mse(predictions_pose, targets_pose)
+            loss_vals = {"total_loss": total_loss.cpu().item()}
 
         return loss_vals, targets_pose
