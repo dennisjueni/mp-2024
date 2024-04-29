@@ -6,6 +6,7 @@ import numpy as np
 from models import BaseModel
 from data import AMASSBatch # type: ignore
 from losses import mse  # type: ignore
+from configuration import CONSTANTS as C
 
 
 transformer_config = {
@@ -110,7 +111,9 @@ class Transformer(BaseModel):
         d_model = torch.tensor(self.d_model).float()
         arg1 = torch.rsqrt(torch.tensor(global_step))
         arg2 = torch.tensor(global_step * (self.warm_up_steps**-1.5))
-        return torch.rsqrt(d_model) * torch.min(arg1, arg2)
+        ret = torch.rsqrt(d_model) * torch.min(arg1, arg2)
+
+        return ret.to(device=C.DEVICE)
 
     @staticmethod
     def scaled_dot_product_attention(q, k, v, mask=None):
@@ -131,7 +134,7 @@ class Transformer(BaseModel):
         # scale matmul_qk
         dk = k.size(-1)
         scaled_attention_logits = matmul_qk / torch.sqrt(
-            torch.tensor(dk, dtype=torch.float32)
+            torch.tensor(dk, dtype=torch.float32).to(device=C.DEVICE)
         )
 
         # add the mask to the scaled tensor.
@@ -157,7 +160,7 @@ class Transformer(BaseModel):
         mask = torch.ones((size, size)).triu(
             diagonal=1
         )  # Generate an upper triangular matrix
-        return mask  # (seq_len, seq_len)
+        return mask.to(device=C.DEVICE)  # (seq_len, seq_len)
 
     def get_angles(self, pos, i):
         """
@@ -187,7 +190,9 @@ class Transformer(BaseModel):
 
         pos_encoding = angle_rads[np.newaxis, :, np.newaxis, :]
 
-        return torch.tensor(pos_encoding).float()  # (1, seq_len, 1, d_model)
+        ret = torch.tensor(pos_encoding).float()  # (1, seq_len, 1, d_model)
+
+        return ret.to(device=C.DEVICE)
 
     def sep_split_heads(self, x, batch_size, seq_len, num_heads):
         """
@@ -266,7 +271,9 @@ class Transformer(BaseModel):
             ]  # (batch_size, num_heads, seq_len)
             attn_weights.append(last_attention_weights)
 
-        return torch.cat(outputs, dim=2), torch.stack(attn_weights, dim=0)
+        return torch.cat(outputs, dim=2).to(device=C.DEVICE), torch.stack(
+            attn_weights, dim=0
+        ).to(device=C.DEVICE)
 
     def split_heads(self, x, shape0, shape1, attn_dim, num_heads):
         """
