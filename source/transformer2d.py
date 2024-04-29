@@ -491,7 +491,6 @@ class Transformer(BaseModel):
         # batch.poses.shape = ([16, 144, 135])
 
         batch_size = batch.batch_size
-
         model_out = {
             "seed": batch.poses[:, : self.config.seed_seq_len],
             "predictions": None,
@@ -531,7 +530,8 @@ class Transformer(BaseModel):
                 outputs, _ = self.transformer(
                     inputs.view(
                         batch_size, self.window_len, self.num_joints, self.joint_size
-                    )
+                    ),
+                    self.look_ahead_mask,
                 )
 
                 outputs = outputs.reshape(
