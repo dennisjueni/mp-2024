@@ -155,7 +155,7 @@ def main(config):
     optimizer = optim.SGD(net.parameters(), lr=config.lr)
 
     # Training loop.
-    global_step = 0
+    global_step = 1
     best_valid_loss = float('inf')
     for epoch in range(config.n_epochs):
 

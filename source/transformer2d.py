@@ -9,55 +9,25 @@ from losses import mse  # type: ignore
 from configuration import CONSTANTS as C
 
 
-transformer_config = {
-    "transformer_d_model": 128,
-    "transformer_dff": 256,
-    "transformer_dropout_rate": 0.1,
-    "transformer_lr": 1,
-    "transformer_num_heads_spacial": 8,
-    "transformer_num_heads_temporal": 8,
-    "transformer_num_layers": 1,  # TODO: DENNIS FIX THIS
-    "transformer_warm_up_steps": 10000,
-    "transformer_window_length": 120,
-    "transformer_num_joints": 15,
-    "transformer_joint_size": 9,
-}
+class ParallelAttention(nn.Module):
+    def __init__(
+        self,
+        num_joints: int,
+        d_model: int,
+        num_heads_temporal: int,
+        num_heads_spacial: int,
+        dropout_rate: float,
+        dff: int,
+    ):
+        super(ParallelAttention, self).__init__()
+        self.num_joints = num_joints
+        self.d_model = d_model
+        self.num_heads_temporal = num_heads_temporal
+        self.num_heads_spacial = num_heads_spacial
+        self.dropout_rate = dropout_rate
+        self.dff = dff
 
-
-class Transformer(BaseModel):
-    """Our implementation of the Transformer model from the Motion Transformer paper."""
-
-    def __init__(self, config):
-        super(BaseModel, self).__init__()
-        self.config = config
-        self.pose_size = config.pose_size
-
-        self.d_model: int = transformer_config["transformer_d_model"]
-        self.dff: int = transformer_config["transformer_dff"]
-        self.dropout_rate: int = transformer_config["transformer_dropout_rate"]
-        self.lr_type: int = transformer_config["transformer_lr"]
-        self.num_heads_spacial: int = transformer_config[
-            "transformer_num_heads_spacial"
-        ]
-        self.num_heads_temporal: int = transformer_config[
-            "transformer_num_heads_temporal"
-        ]
-        self.num_layers: int = transformer_config["transformer_num_layers"]
-        self.warm_up_steps: int = transformer_config["transformer_warm_up_steps"]
-        self.window_len: int = transformer_config["transformer_window_length"]
-        self.num_joints: int = transformer_config["transformer_num_joints"]
-        self.joint_size: int = transformer_config["transformer_joint_size"]
-
-        self.pos_encoding = self.positional_encoding()
-        self.look_ahead_mask = self.create_look_ahead_mask()
-
-        self.create_model()
-
-    def create_model(self):
-
-        # TODO DENNIS: Currently we reuse the layers for all 8 transformer layers, which we definitely do not want!
-
-        # Define layers for query, key, and value for all joints
+        # Define the Q,K,V matrices for each joint in the temporal attention
         self.temp_query_layers = nn.ModuleList(
             [nn.Linear(self.d_model, self.d_model) for _ in range(self.num_joints)]
         )
@@ -69,13 +39,19 @@ class Transformer(BaseModel):
         )
         self.temp_output_dense = nn.Linear(self.d_model, self.d_model)
 
-        # Define layers for query, key, and value for all joints
+        # Define a single K,V matrix, and a Q matrix for each joint in the spacial attention
         self.spac_key_layer = nn.Linear(self.d_model, self.d_model)
         self.spac_value_layer = nn.Linear(self.d_model, self.d_model)
         self.spac_query_layers = nn.ModuleList(
             [nn.Linear(self.d_model, self.d_model) for _ in range(self.num_joints)]
         )
         self.spac_output_dense = nn.Linear(self.d_model, self.d_model)
+
+        self.temp_dropout = nn.Dropout(self.dropout_rate)
+        self.temp_layer_norm = nn.LayerNorm(self.d_model)
+
+        self.spac_dropout = nn.Dropout(self.dropout_rate)
+        self.spac_layer_norm = nn.LayerNorm(self.d_model)
 
         self.ff1_layers = nn.ModuleList(
             [nn.Linear(self.d_model, self.dff) for _ in range(self.num_joints)]
@@ -84,39 +60,10 @@ class Transformer(BaseModel):
             [nn.Linear(self.dff, self.d_model) for _ in range(self.num_joints)]
         )
 
-        self.temp_dropout = nn.Dropout(self.dropout_rate)
-        self.temp_layer_norm = nn.LayerNorm(self.d_model)
-
-        self.spac_dropout = nn.Dropout(self.dropout_rate)
-        self.spac_layer_norm = nn.LayerNorm(self.d_model)
-
         self.ffn_dropout = nn.Dropout(self.dropout_rate)
         self.ffn_layer_norm = nn.LayerNorm(self.d_model)
 
-        self.input_dropout = nn.Dropout(self.dropout_rate)
-
-        self.embedding_layers = nn.ModuleList(
-            [nn.Linear(self.joint_size, self.d_model) for _ in range(self.num_joints)]
-        )
-
-        self.decoding_layers = nn.ModuleList(
-            [nn.Linear(self.d_model, self.joint_size) for _ in range(self.num_joints)]
-        )
-
-    def model_name(self):
-        """A summary string of this model. Override this if desired."""
-        return "torch_transformer"
-
-    def learning_rate_scheduler(self, global_step):
-        d_model = torch.tensor(self.d_model).float()
-        arg1 = torch.rsqrt(torch.tensor(global_step))
-        arg2 = torch.tensor(global_step * (self.warm_up_steps**-1.5))
-        ret = torch.rsqrt(d_model) * torch.min(arg1, arg2)
-
-        return ret.to(device=C.DEVICE)
-
-    @staticmethod
-    def scaled_dot_product_attention(q, k, v, mask=None):
+    def scaled_dot_product_attention(self, q, k, v, mask=None):
         """
         The scaled dot product attention mechanism introduced in the Transformer
         :param q: the query vectors matrix (..., attn_dim, d_model/num_heads)
@@ -149,50 +96,6 @@ class Transformer(BaseModel):
         output = torch.matmul(attention_weights, v)  # (..., num_heads, attn_dim, depth)
 
         return output, attention_weights
-
-    def create_look_ahead_mask(self):
-        """
-        Create a look ahead mask given a certain window length.
-        :return: the mask (window_length, window_length)
-        """
-        size = self.window_len
-
-        mask = torch.ones((size, size)).triu(
-            diagonal=1
-        )  # Generate an upper triangular matrix
-        return mask.to(device=C.DEVICE)  # (seq_len, seq_len)
-
-    def get_angles(self, pos, i):
-        """
-        calculate the angles givin postion and i for the positional encoding formula
-        :param pos: pos in the formula
-        :param i: i in the formula
-        :return: angle rad
-        """
-        angle_rates = 1 / np.power(10000, (2 * (i // 2)) / np.float32(self.d_model))
-        return pos * angle_rates
-
-    def positional_encoding(self):
-        """
-        Calculate the positional encoding given the window length.
-        :return: positional encoding (1, window_length, 1, d_model)
-        """
-        angle_rads = self.get_angles(
-            np.arange(self.window_len)[:, np.newaxis],
-            np.arange(self.d_model)[np.newaxis, :],
-        )
-
-        # apply sin to even indices in the array; 2i
-        angle_rads[:, 0::2] = np.sin(angle_rads[:, 0::2])
-
-        # apply cos to odd indices in the array; 2i+1
-        angle_rads[:, 1::2] = np.cos(angle_rads[:, 1::2])
-
-        pos_encoding = angle_rads[np.newaxis, :, np.newaxis, :]
-
-        ret = torch.tensor(pos_encoding).float()  # (1, seq_len, 1, d_model)
-
-        return ret.to(device=C.DEVICE)
 
     def sep_split_heads(self, x, batch_size, seq_len, num_heads):
         """
@@ -271,9 +174,10 @@ class Transformer(BaseModel):
             ]  # (batch_size, num_heads, seq_len)
             attn_weights.append(last_attention_weights)
 
-        return torch.cat(outputs, dim=2).to(device=C.DEVICE), torch.stack(
-            attn_weights, dim=0
-        ).to(device=C.DEVICE)
+        return (
+            torch.cat(outputs, dim=2).to(device=C.DEVICE),
+            torch.stack(attn_weights, dim=0).to(device=C.DEVICE),
+        )
 
     def split_heads(self, x, shape0, shape1, attn_dim, num_heads):
         """
@@ -380,7 +284,7 @@ class Transformer(BaseModel):
         )
         return outputs
 
-    def para_transformer_layer(self, x, look_ahead_mask):
+    def forward(self, x, look_ahead_mask):
         """
         The layer with spatial and temporal blocks in parallel
         :param x: the input (batch_size, seq_len, num_joints, d_model)
@@ -416,6 +320,133 @@ class Transformer(BaseModel):
 
         return final, attn_weights_block1, attn_weights_block2
 
+
+transformer_config = {
+    "transformer_d_model": 128,
+    "transformer_dff": 256,
+    "transformer_dropout_rate": 0.1,
+    "transformer_lr": 1,
+    "transformer_num_heads_spacial": 8,
+    "transformer_num_heads_temporal": 8,
+    "transformer_num_layers": 8,
+    "transformer_warm_up_steps": 10000,
+    "transformer_window_length": 120,
+    "transformer_num_joints": 15,
+    "transformer_joint_size": 9,
+}
+
+
+class Transformer(BaseModel):
+    """Our implementation of the Transformer model from the Motion Transformer paper."""
+
+    def __init__(self, config):
+        super(BaseModel, self).__init__()
+        self.config = config
+        self.pose_size = config.pose_size
+
+        self.d_model: int = transformer_config["transformer_d_model"]
+        self.dff: int = transformer_config["transformer_dff"]
+        self.dropout_rate: int = transformer_config["transformer_dropout_rate"]
+        self.lr_type: int = transformer_config["transformer_lr"]
+        self.num_heads_spacial: int = transformer_config[
+            "transformer_num_heads_spacial"
+        ]
+        self.num_heads_temporal: int = transformer_config[
+            "transformer_num_heads_temporal"
+        ]
+        self.num_layers: int = transformer_config["transformer_num_layers"]
+        self.warm_up_steps: int = transformer_config["transformer_warm_up_steps"]
+        self.window_len: int = transformer_config["transformer_window_length"]
+        self.num_joints: int = transformer_config["transformer_num_joints"]
+        self.joint_size: int = transformer_config["transformer_joint_size"]
+
+        self.pos_encoding = self.positional_encoding()
+        self.look_ahead_mask = self.create_look_ahead_mask()
+
+        self.create_model()
+
+    def create_model(self):
+
+        self.input_dropout = nn.Dropout(self.dropout_rate)
+
+        self.embedding_layers = nn.ModuleList(
+            [nn.Linear(self.joint_size, self.d_model) for _ in range(self.num_joints)]
+        )
+
+        self.para_attention_layers = nn.ModuleList(
+            [
+                ParallelAttention(
+                    self.num_joints,
+                    self.d_model,
+                    self.num_heads_temporal,
+                    self.num_heads_spacial,
+                    self.dropout_rate,
+                    self.dff,
+                )
+                for _ in range(self.num_layers)
+            ]
+        )
+
+        self.decoding_layers = nn.ModuleList(
+            [nn.Linear(self.d_model, self.joint_size) for _ in range(self.num_joints)]
+        )
+
+    def model_name(self):
+        """A summary string of this model. Override this if desired."""
+        return "torch_transformer"
+
+    def learning_rate_scheduler(self, global_step):
+        d_model = torch.tensor(self.d_model).float()
+        arg1 = torch.rsqrt(torch.tensor(global_step))
+        arg2 = torch.tensor(global_step * (self.warm_up_steps**-1.5))
+        ret = torch.rsqrt(d_model) * torch.min(arg1, arg2)
+
+        return ret.to(device=C.DEVICE)
+
+    def create_look_ahead_mask(self):
+        """
+        Create a look ahead mask given a certain window length.
+        :return: the mask (window_length, window_length)
+        """
+        size = self.window_len
+
+        mask = torch.ones((size, size)).triu(
+            diagonal=1
+        )  # Generate an upper triangular matrix
+        return mask.to(device=C.DEVICE)  # (seq_len, seq_len)
+
+    def get_angles(self, pos, i):
+        """
+        calculate the angles givin postion and i for the positional encoding formula
+        :param pos: pos in the formula
+        :param i: i in the formula
+        :return: angle rad
+        """
+        angle_rates = 1 / np.power(10000, (2 * (i // 2)) / np.float32(self.d_model))
+        return pos * angle_rates
+
+    def positional_encoding(self):
+        """
+        Calculate the positional encoding given the window length.
+        :return: positional encoding (1, window_length, 1, d_model)
+        """
+        angle_rads = self.get_angles(
+            np.arange(self.window_len)[:, np.newaxis],
+            np.arange(self.d_model)[np.newaxis, :],
+        )
+
+        # apply sin to even indices in the array; 2i
+        angle_rads[:, 0::2] = np.sin(angle_rads[:, 0::2])
+
+        # apply cos to odd indices in the array; 2i+1
+        angle_rads[:, 1::2] = np.cos(angle_rads[:, 1::2])
+
+        pos_encoding = angle_rads[np.newaxis, :, np.newaxis, :]
+
+        ret = torch.tensor(pos_encoding).float()  # (1, seq_len, 1, d_model)
+
+        return ret.to(device=C.DEVICE)
+
     def transformer(self, inputs, look_ahead_mask=None):
         """
         The attention blocks
@@ -436,8 +467,10 @@ class Transformer(BaseModel):
             )  # (batch_size, seq_len, d_model)
             embed.append(joint_rep)
 
-        x = torch.cat(embed, dim=-1)
-        x = x.view(x.size(0), x.size(1), self.num_joints, self.d_model)
+        x = torch.cat(embed, dim=-1)  # (batch_size, seq_len, num_joints * d_model)
+        x = x.view(
+            x.size(0), x.size(1), self.num_joints, self.d_model
+        )  # (batch_size, seq_len, num_joints, d_model)
 
         # add the positional encoding
         x += self.pos_encoding
@@ -451,8 +484,8 @@ class Transformer(BaseModel):
         attention_weights_spatial = []
         attention_weights = {}
 
-        for _ in range(self.num_layers):
-            x, block1, block2 = self.para_transformer_layer(x, look_ahead_mask)
+        for i in range(self.num_layers):
+            x, block1, block2 = self.para_attention_layers[i](x, look_ahead_mask)
             attention_weights_temporal += [
                 block1
             ]  # (batch_size, num_joints, num_heads, seq_len)
@@ -498,12 +531,11 @@ class Transformer(BaseModel):
 
         if self.training:
 
-            prediction_targets = batch.poses[:, : self.window_len + 1, :]
-            target_input = prediction_targets[:, :-1, :]  # Sequence from 0 to 120
-
+            # Sequence from 0 to 120
+            target_input = batch.poses[:, : self.window_len, :]
             sequence_length = target_input.shape[1]
 
-            assert sequence_length == self.window_len and sequence_length == 120
+            assert sequence_length == 120
 
             outputs, _ = self.transformer(
                 target_input.view(
@@ -554,15 +586,14 @@ class Transformer(BaseModel):
 
     def backward(self, batch: AMASSBatch, model_out):
         """The backward pass."""
-        predictions_pose = model_out["predictions"]
+        predictions_pose = model_out["predictions"]  # (16, 120, 135)
 
         if self.training:
+            # Sequence from 1 to 121
+            targets_pose = batch.poses[:, 1 : self.window_len + 1, :]
+            seq_len = targets_pose.shape[1]
 
-            prediction_targets = batch.poses[:, : self.window_len + 1, :]
-            target_real = prediction_targets[:, 1:, :]  # Sequence from 1 to 121
-
-            targets_pose = target_real
-            seq_len = self.window_len
+            assert seq_len == 120
 
             diff = targets_pose - predictions_pose
             per_joint_loss = torch.square(diff).view(
@@ -570,8 +601,9 @@ class Transformer(BaseModel):
             )
             per_joint_loss = torch.sqrt(torch.sum(per_joint_loss, dim=-1))
             per_joint_loss = torch.sum(per_joint_loss, dim=-1)
-            per_joint_loss = torch.mean(per_joint_loss)
-            loss_ = per_joint_loss
+            loss_ = torch.mean(per_joint_loss)
+
+            print(f"Dennis Loss: {loss_}")
 
             loss_vals = {"total_loss": loss_.cpu().item()}
             loss_.backward()

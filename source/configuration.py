@@ -71,13 +71,18 @@ class Configuration(object):
         parser.add_argument('--target_seq_len', type=int, default=24, help='How many frames to predict.')
 
         # Learning configurations.
-        parser.add_argument('--lr', type=float, default=0.001, help='Learning rate.')
         parser.add_argument(
             "--n_epochs", type=int, default=10, help="Number of epochs."
         )
         parser.add_argument('--bs_train', type=int, default=16, help='Batch size for the training set.')
         parser.add_argument('--bs_eval', type=int, default=16, help='Batch size for valid/test set.')
 
+        parser.add_argument(
+            "--lr",
+            type=float,
+            default=0.001,
+            help="Learning rate. Ignored if --use_lr_scheduler is True",
+        )
         parser.add_argument(
             "--use_lr_scheduler", type=bool, default=True, help="Use lr Scheduler"
         )
