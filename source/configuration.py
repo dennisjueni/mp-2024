@@ -72,7 +72,7 @@ class Configuration(object):
 
         # Learning configurations.
         parser.add_argument(
-            "--n_epochs", type=int, default=10, help="Number of epochs."
+            "--n_epochs", type=int, default=50, help="Number of epochs."
         )
         parser.add_argument('--bs_train', type=int, default=16, help='Batch size for the training set.')
         parser.add_argument('--bs_eval', type=int, default=16, help='Batch size for valid/test set.')
