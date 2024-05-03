@@ -620,8 +620,6 @@ class Transformer(BaseModel):
             per_joint_loss = torch.sum(per_joint_loss, dim=-1)
             loss_ = torch.mean(per_joint_loss)
 
-            print(f"Dennis Loss: {loss_}")
-
             loss_vals = {"total_loss": loss_.cpu().item()}
             loss_.backward()
 
