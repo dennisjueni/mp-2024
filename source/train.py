@@ -121,7 +121,7 @@ def main(config):
     setattr(config, 'pose_size', 135)
 
     # Create the model.
-    net, _, _ = load_model("1715342896-torch_transformer")
+    net = create_model(config)
     net.to(C.DEVICE)
     print('Model created with {} trainable parameters'.format(U.count_parameters(net)))
 
@@ -152,7 +152,7 @@ def main(config):
     writer = SummaryWriter(os.path.join(model_dir, 'logs'))
 
     # Define the optimizer.
-    optimizer = optim.AdamW(net.parameters(), lr=config.lr, weight_decay=1e-2)
+    optimizer = optim.Adam(net.parameters(), lr=config.lr)
 
     # Training loop.
     global_step = 1
@@ -173,7 +173,7 @@ def main(config):
             train_losses, targets = net.backward(batch_gpu, model_out)
 
             if config.use_lr_scheduler:
-                lr = net.finetuning_lr_scheduler(global_step)
+                lr = net.learning_rate_scheduler(global_step)
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = lr
                 writer.add_scalar("lr", lr, global_step)
