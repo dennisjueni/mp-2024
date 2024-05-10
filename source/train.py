@@ -19,7 +19,7 @@ from data import AMASSBatch
 from data import LMDBDataset
 from data_transforms import ExtractWindow
 from data_transforms import ToTensor
-from evaluate import evaluate_test
+from evaluate import evaluate_test, load_model
 from utils import create_model
 from motion_metrics import MetricsEngine
 from tensorboardX import SummaryWriter
@@ -28,11 +28,11 @@ from torch.utils.data import DataLoader
 from torchvision.transforms import transforms
 
 
-def _log_loss_vals(loss_vals, writer, global_step, mode_prefix):
+def _log_loss_vals(loss_vals, writer, global_step, epoch, mode_prefix):
     for k in loss_vals:
         prefix = '{}/{}'.format(k, mode_prefix)
-        writer.add_scalar(prefix, loss_vals[k], global_step)
         wandb.log({prefix: loss_vals[k]}, step=global_step)
+        wandb.log({'epoch': epoch}, step=global_step)
 
 
 def _evaluate(net, data_loader, metrics_engine):
@@ -121,7 +121,7 @@ def main(config):
     setattr(config, 'pose_size', 135)
 
     # Create the model.
-    net = create_model(config)
+    net, _, _ = load_model("1715342896-torch_transformer")
     net.to(C.DEVICE)
     print('Model created with {} trainable parameters'.format(U.count_parameters(net)))
 
@@ -152,7 +152,7 @@ def main(config):
     writer = SummaryWriter(os.path.join(model_dir, 'logs'))
 
     # Define the optimizer.
-    optimizer = optim.SGD(net.parameters(), lr=config.lr)
+    optimizer = optim.AdamW(net.parameters(), lr=config.lr, weight_decay=1e-2)
 
     # Training loop.
     global_step = 1
@@ -173,7 +173,7 @@ def main(config):
             train_losses, targets = net.backward(batch_gpu, model_out)
 
             if config.use_lr_scheduler:
-                lr = net.learning_rate_scheduler(global_step)
+                lr = net.finetuning_lr_scheduler(global_step)
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = lr
                 writer.add_scalar("lr", lr, global_step)
@@ -188,7 +188,7 @@ def main(config):
             elapsed = time.time() - start
 
             # Write training stats to Tensorboard.
-            _log_loss_vals(train_losses, writer, global_step, "train")
+            _log_loss_vals(train_losses, writer, global_step, epoch, "train")
 
             if global_step % (config.print_every - 1) == 0:
                 loss_string = ' '.join(['{}: {:.6f}'.format(k, train_losses[k]) for k in train_losses])
@@ -213,7 +213,7 @@ def main(config):
                 print('[VALID {:0>5d} | {:0>3d}] {}'.format(i+1, epoch+1, me.get_summary_string(valid_metrics)))
 
                 # Log to tensorboard.
-                _log_loss_vals(valid_losses, writer, global_step, 'valid')
+                _log_loss_vals(valid_losses, writer, global_step, epoch, 'valid')
                 me.to_tensorboard_log(valid_metrics, writer, global_step, 'valid')
 
                 # Save the current model if it's better than what we've seen before.

@@ -26,6 +26,8 @@ class ParallelAttention(nn.Module):
         self.num_heads_spacial = num_heads_spacial
         self.dropout_rate = dropout_rate
         self.dff = dff
+        
+        self.a = nn.Parameter(torch.rand(1))
 
         # Define the Q,K,V matrices for each joint in the temporal attention
         self.temp_query_layers = nn.ModuleList(
@@ -307,8 +309,12 @@ class ParallelAttention(nn.Module):
 
         spatial_out = self.spac_layer_norm(attn2 + x)
 
+        # Pass 'a' through its layer
+        # Apply sigmoid to 'a' to ensure it's between 0 and 1
+        a = torch.sigmoid(self.a)
+        
         # add the temporal output and the spatial output
-        out = temporal_out + spatial_out
+        out = a*temporal_out + (1 - a)*spatial_out
 
         # feed forward
         ffn_output = self.point_wise_feed_forward_network(out)
@@ -324,12 +330,12 @@ class ParallelAttention(nn.Module):
 transformer_config = {
     "transformer_d_model": 128,
     "transformer_dff": 256,
-    "transformer_dropout_rate": 0.1,
-    "transformer_lr": 1,
+    "transformer_dropout_rate": 0.15,
+    "transformer_lr": 0.00005,
     "transformer_num_heads_spacial": 8,
     "transformer_num_heads_temporal": 8,
     "transformer_num_layers": 8,
-    "transformer_warm_up_steps": 10000,
+    "transformer_warm_up_steps": 8000,
     "transformer_window_length": 120,
     "transformer_num_joints": 15,
     "transformer_joint_size": 9,
@@ -347,7 +353,7 @@ class Transformer(BaseModel):
         self.d_model: int = transformer_config["transformer_d_model"]
         self.dff: int = transformer_config["transformer_dff"]
         self.dropout_rate: int = transformer_config["transformer_dropout_rate"]
-        self.lr_type: int = transformer_config["transformer_lr"]
+        self.lr: int = transformer_config["transformer_lr"]
         self.num_heads_spacial: int = transformer_config[
             "transformer_num_heads_spacial"
         ]
@@ -402,6 +408,17 @@ class Transformer(BaseModel):
         ret = torch.rsqrt(d_model) * torch.min(arg1, arg2)
 
         return ret.to(device=C.DEVICE)
+    
+    def finetuning_lr_scheduler(self, global_step):
+        factor = 0.5 ** (global_step // 1000)
+
+        # Update the current learning rate
+        current_lr = self.lr * factor
+
+        # Convert the learning rate to a tensor and move it to the specified device
+        ret = torch.tensor(current_lr).to(device=C.DEVICE)
+
+        return ret
 
     def create_look_ahead_mask(self):
         """

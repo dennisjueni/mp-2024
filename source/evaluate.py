@@ -69,7 +69,7 @@ def load_model_weights(checkpoint_file, net, state_key='model_state_dict'):
 
 def get_model_config(model_id):
     model_id = model_id
-    model_dir = U.get_model_dir(C.EXPERIMENT_DIR, model_id)
+    model_dir = str(C.EXPERIMENT_DIR) + "/" + str(model_id)
     model_config = Configuration.from_json(os.path.join(model_dir, 'config.json'))
     return model_config, model_dir
 
@@ -77,6 +77,7 @@ def get_model_config(model_id):
 def load_model(model_id):
     model_config, model_dir = get_model_config(model_id)
     net = create_model(model_config)
+
 
     net.to(C.DEVICE)
     print('Model created with {} trainable parameters'.format(U.count_parameters(net)))

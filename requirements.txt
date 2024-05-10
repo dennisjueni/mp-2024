@@ -9,3 +9,5 @@ matplotlib
 numba
 scipy
 wandb
+torch
+torchvision
